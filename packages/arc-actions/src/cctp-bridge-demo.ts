@@ -3,19 +3,24 @@
 // that funds an Arc service payment from another chain — no representation, real
 // Circle infra, real tx hashes on both chains.
 //
-// Prereqs on the deployer address (same EOA on every EVM chain):
-//   • USDC on Base Sepolia   (faucet.circle.com → Base Sepolia)   ✓ you have 20
-//   • ETH on Base Sepolia    (a Base Sepolia ETH faucet — for burn gas)
-//   • USDC on Arc testnet    (already funded — Arc gas is native USDC)
+// Two signers, because gas lives on different chains:
+//   • BASE side (burn): BASE_BURN_KEY — the account holding USDC + ETH on Base
+//     Sepolia. Signs approve + depositForBurn.
+//   • ARC side (mint):  ARC_MINT_KEY (falls back to ARC_DEPLOYER_KEY) — an
+//     account with Arc gas (native USDC). Signs receiveMessage. CCTP lets ANY
+//     caller complete the mint (destinationCaller = 0), so this need not be the
+//     burner. The USDC is minted to ARC_RECIPIENT (default: the Arc mint signer).
 //
-// Run: npm run cctp-bridge:arc   (loads .env.arc-testnet.local)
-//      AMOUNT_USDC=5 npm run cctp-bridge:arc
+// Run: BASE_BURN_KEY=0x<key> npm run cctp-bridge:arc
+//      BASE_BURN_KEY=0x<key> AMOUNT_USDC=5 npm run cctp-bridge:arc
 
 import { JsonRpcProvider, Wallet, Contract, formatUnits, zeroPadValue, getBytes } from "ethers";
 import { CCTP_V2, CCTP_DOMAINS, CCTP_ATTESTATION_API, ARC_DESTINATION } from "./cctp-arc.js";
 
-const KEY = process.env.ARC_DEPLOYER_KEY;
-if (!KEY) { console.error("ARC_DEPLOYER_KEY required (in .env.arc-testnet.local)"); process.exit(1); }
+const BASE_BURN_KEY = process.env.BASE_BURN_KEY ?? process.env.BASE_SEPOLIA_PRIVATE_KEY;
+const ARC_MINT_KEY = process.env.ARC_MINT_KEY ?? process.env.ARC_DEPLOYER_KEY;
+if (!BASE_BURN_KEY) { console.error("BASE_BURN_KEY required (the account with USDC+ETH on Base Sepolia)"); process.exit(1); }
+if (!ARC_MINT_KEY) { console.error("ARC_MINT_KEY / ARC_DEPLOYER_KEY required (an account with Arc gas to complete the mint)"); process.exit(1); }
 const AMOUNT = BigInt(process.env.AMOUNT_USDC ?? "5") * 1_000_000n; // USDC has 6 decimals
 
 const BASE_RPC = "https://sepolia.base.org";
@@ -62,32 +67,29 @@ async function main() {
 
   const base = new JsonRpcProvider(BASE_RPC, 84532);
   const arc = new JsonRpcProvider(ARC_DESTINATION.rpcUrl, ARC_DESTINATION.chainId);
-  const baseSigner = new Wallet(KEY!, base);
-  const arcSigner = new Wallet(KEY!, arc);
-  const recipient = baseSigner.address;
+  const baseSigner = new Wallet(BASE_BURN_KEY!, base);
+  const arcSigner = new Wallet(ARC_MINT_KEY!, arc);
+  const burner = baseSigner.address;
+  const arcRecipient = process.env.ARC_RECIPIENT ?? arcSigner.address; // where USDC lands on Arc
 
   step("Preflight — balances + contracts");
   const usdc = new Contract(BASE_USDC, ERC20_ABI, baseSigner);
-  const [baseEth, baseUsdc, arcUsdc] = await Promise.all([
-    base.getBalance(recipient), usdc.balanceOf(recipient), arc.getBalance(recipient),
+  const [baseEth, baseUsdc, arcGas] = await Promise.all([
+    base.getBalance(burner), usdc.balanceOf(burner), arc.getBalance(arcSigner.address),
   ]);
-  kv("account", recipient);
+  kv("burn account (Base)", burner);
+  kv("mint account (Arc)", arcSigner.address);
+  kv("USDC lands on Arc at", arcRecipient);
   kv("Base Sepolia ETH (gas)", formatUnits(baseEth, 18) + " ETH");
   kv("Base Sepolia USDC", formatUnits(baseUsdc, 6) + " USDC");
-  kv("Arc USDC (gas)", formatUnits(arcUsdc, 18) + " USDC");
+  kv("Arc gas (native USDC)", formatUnits(arcGas, 18) + " USDC");
   kv("transfer amount", formatUnits(AMOUNT, 6) + " USDC");
-  if (baseUsdc < AMOUNT) { console.error(`\nInsufficient Base USDC. Fund at faucet.circle.com (Base Sepolia).`); process.exit(1); }
-  if (baseEth === 0n) {
-    console.error("\n\x1b[31mNo Base Sepolia ETH for gas.\x1b[0m The burn tx needs a little native ETH.");
-    console.error("Get ~0.01 Base Sepolia ETH from a faucet, e.g.:");
-    console.error("  • https://www.alchemy.com/faucets/base-sepolia");
-    console.error("  • https://faucet.quicknode.com/base/sepolia");
-    console.error(`Fund: ${recipient}  — then re-run: npm run cctp-bridge:arc`);
-    process.exit(1);
-  }
+  if (baseUsdc < AMOUNT) { console.error(`\nInsufficient Base USDC on ${burner}.`); process.exit(1); }
+  if (baseEth === 0n) { console.error(`\n\x1b[31mNo Base Sepolia ETH on ${burner} for burn gas.\x1b[0m`); process.exit(1); }
+  if (arcGas === 0n) { console.error(`\n\x1b[31mNo Arc gas on the mint account ${arcSigner.address}.\x1b[0m`); process.exit(1); }
 
   step("1/4 — Approve the TokenMessenger to burn USDC (Base Sepolia)");
-  const allowance: bigint = await usdc.allowance(recipient, CCTP_V2.tokenMessenger);
+  const allowance: bigint = await usdc.allowance(burner, CCTP_V2.tokenMessenger);
   if (allowance < AMOUNT) {
     const atx = await usdc.approve(CCTP_V2.tokenMessenger, AMOUNT);
     kv("approve tx", atx.hash);
@@ -96,7 +98,7 @@ async function main() {
 
   step("2/4 — depositForBurn (Base Sepolia → Arc, CCTP domain 26)");
   const tm = new Contract(CCTP_V2.tokenMessenger, TOKEN_MESSENGER_ABI, baseSigner);
-  const mintRecipient = zeroPadValue(recipient, 32); // bytes32 of the Arc recipient
+  const mintRecipient = zeroPadValue(arcRecipient, 32); // bytes32 of the Arc recipient
   const destinationCaller = "0x" + "00".repeat(32); // anyone can complete on Arc
   const maxFee = AMOUNT / 1000n; // small fast-transfer fee cap
   const minFinality = 1000; // fast
@@ -113,14 +115,14 @@ async function main() {
   kv("message", message.slice(0, 42) + "…");
 
   step("4/4 — receiveMessage on Arc (mint USDC on Arc)");
-  const arcBalBefore = await arc.getBalance(recipient);
+  const arcBalBefore = await arc.getBalance(arcRecipient);
   const mt = new Contract(CCTP_V2.messageTransmitter, MESSAGE_TRANSMITTER_ABI, arcSigner);
   const mtx = await mt.receiveMessage(getBytes(message), getBytes(attestation));
   kv("mint tx (Arc)", mtx.hash);
   const mrec = await mtx.wait();
-  const arcBalAfter = await arc.getBalance(recipient);
+  const arcBalAfter = await arc.getBalance(arcRecipient);
   kv("mint status", mrec.status === 1 ? "SUCCESS" : "FAIL");
-  kv("Arc balance delta", formatUnits(arcBalAfter - arcBalBefore, 18) + " (native USDC; net of gas)");
+  kv("recipient balance delta", formatUnits(arcBalAfter - arcBalBefore, 18) + " (USDC minted on Arc)");
   kv("explorer", `https://testnet.arcscan.app/tx/${mtx.hash}`);
 
   console.log("\n\x1b[1m\x1b[32m═══ REAL CROSS-CHAIN LEG COMPLETE — USDC burned on Base Sepolia and");

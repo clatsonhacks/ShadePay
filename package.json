@@ -30,7 +30,7 @@
     "stream-demo:arc": "tsx --env-file=.env.arc-testnet.local packages/arc-actions/src/stream-demo.ts",
     "agent-service-demo": "tsx packages/arc-actions/src/agent-service-demo.ts",
     "agent-service-demo:arc": "tsx --env-file=.env.arc-testnet.local packages/arc-actions/src/agent-service-demo.ts",
-    "cctp-bridge:arc": "tsx --env-file=.env.arc-testnet.local packages/arc-actions/src/cctp-bridge-demo.ts",
+    "cctp-bridge:arc": "tsx --env-file=.env --env-file=.env.arc-testnet.local packages/arc-actions/src/cctp-bridge-demo.ts",
     "contracts:build:arc": "cd contracts/arc && forge build",
     "contracts:test:arc": "cd contracts/arc && forge test -vv",
     "proofs:test": "tsx apps/prover/src/proofs-test.ts",
