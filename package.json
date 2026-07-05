@@ -87,6 +87,8 @@
     "mpc:integration": "tsx apps/cli/src/phase2-integration.ts",
     "sdk:test": "tsx packages/sdk/src/sdk-test.ts",
     "streams-sdk:test": "tsx packages/sdk/src/streams-test.ts",
+    "receipts:test": "tsx packages/sdk/src/receipts-test.ts",
+    "agents:test": "tsx packages/sdk/src/agents-test.ts",
     "x402:test": "tsx apps/api/src/x402-test.ts",
     "stream-relayer:test": "tsx apps/relayer/src/stream-relayer-test.ts",
     "deploy:mpc:verifier": "tsx scripts/deploy-mpc-verifier.ts",

@@ -188,6 +188,48 @@ export function walletFromPrivateKey(privateKey: string, network: Network): Wall
 }
 
 /**
+ * Fetch a Shade Streams channel receipt from on-chain StreamEscrow events and
+ * reconstruct it via @shade/sdk's pure reconstructChannelReceipt. This is the
+ * on-chain half of the receipts feature (the pure reconstruction lives in the
+ * browser-safe SDK). Queries ChannelOpened/ChannelSettled/ChannelReclaimed for
+ * the given channelId and returns the resulting StreamReceipt.
+ */
+export async function fetchChannelReceipt(
+  network: Network,
+  escrowAddress: string,
+  channelId: bigint,
+  fromBlock: number = 0
+): Promise<import("@shade/sdk").StreamReceipt> {
+  const { STREAM_ESCROW_ABI } = await import("./abi.js");
+  const { reconstructChannelReceipt } = await import("@shade/sdk");
+  const provider = providerFor(network);
+  const contract = new Contract(escrowAddress, STREAM_ESCROW_ABI as unknown as string[], provider);
+
+  const cidTopic = channelId; // indexed uint256 — ethers filters by value
+  const [opened, settled, reclaimed] = await Promise.all([
+    contract.queryFilter(contract.filters.ChannelOpened(cidTopic), fromBlock),
+    contract.queryFilter(contract.filters.ChannelSettled(cidTopic), fromBlock),
+    contract.queryFilter(contract.filters.ChannelReclaimed(cidTopic), fromBlock),
+  ]);
+
+  const events: import("@shade/sdk").ChannelEvent[] = [];
+  for (const e of opened) {
+    const a = (e as import("ethers").EventLog).args;
+    events.push({ kind: "opened", channelId: BigInt(a[0]), cap: BigInt(a[1]), expiry: BigInt(a[2]), changeCommitment: BigInt(a[3]), txHash: e.transactionHash });
+  }
+  for (const e of settled) {
+    const a = (e as import("ethers").EventLog).args;
+    events.push({ kind: "settled", channelId: BigInt(a[0]), cumulative: BigInt(a[1]), payeeCommitment: BigInt(a[2]), refundCommitment: BigInt(a[3]), txHash: e.transactionHash });
+  }
+  for (const e of reclaimed) {
+    const a = (e as import("ethers").EventLog).args;
+    events.push({ kind: "reclaimed", channelId: BigInt(a[0]), cap: BigInt(a[1]), reclaimCommitment: BigInt(a[2]), txHash: e.transactionHash });
+  }
+
+  return reconstructChannelReceipt(channelId, events);
+}
+
+/**
  * TransactionRequest carries bigint fields (gasLimit, value, chainId, fee
  * fields) that JSON.stringify cannot serialize directly. Converts them to
  * decimal strings for HTTP transport; the receiving wallet/ethers.js accepts

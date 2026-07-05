@@ -207,6 +207,18 @@ async function main() {
   // INVARIANT #8: receipt gross == on-chain settled net (public signal [9] == voucher cumulative)
   check("invariant #8: settled cumulative == voucher cumulative", settlePubNums[9] === cumulative, `${settlePubNums[9]}`);
 
+  // Phase 6: reconstruct the channel receipt from REAL on-chain events and
+  // confirm it matches the settlement (invariant #8 audited via the receipt).
+  {
+    const { fetchChannelReceipt } = await import("./index.js");
+    const receipt = await fetchChannelReceipt({ rpcUrl: RPC_URL }, escrowAddr, channelId);
+    check("receipt: reconstructed state == settled", receipt.state === "settled");
+    check("receipt: gross == voucher cumulative (invariant #8 audited)", receipt.gross === cumulative, `${receipt.gross}`);
+    const payee = receipt.split.find((s) => s.recipient === "payee");
+    const payer = receipt.split.find((s) => s.recipient === "payer");
+    check("receipt: split conserves cap", !!payee && !!payer && payee.amount + payer.amount === cap);
+  }
+
   // adversarial: settle again -> channel consumed (invariant #4 on-chain, real proof)
   try {
     await (await (escrow.connect(admin) as any).settle(settleResult.proof, settlePubNums, { nonce: aNonce++ })).wait();
