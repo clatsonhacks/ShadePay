@@ -30,11 +30,22 @@ and charge $10. **Nanopayments remove the floor.** But a transparent per-call
 loop leaks every payment. Shade Streams gives you both: **sub-cent, per-call
 payments that are also private**, settled on Arc in USDC.
 
+Two rails, one story:
+
 ```
-OPEN     agent locks a spending cap into a channel (1 ZK proof, private amount)
-STREAM   agent signs a voucher per request — 0 gas, 0 chain writes, per call
-SETTLE   service submits the highest voucher — only the NET hits chain (1 ZK proof)
-RECLAIM  if never settled, the agent reclaims the full cap after a timeout
+BASE RAIL — StreamPay.sol      real native USDC per second, on-chain meter
+                               open (fund cap) · pause/resume · withdraw · stop-with-refund
+                               continuous authorization of a RATE, not a signature per tick
+
+PRIVACY LAYER — shielded stream  vouchers off-chain, one ZK proof to settle the private NET
+                                 (composes on top of the base rail — hides per-tick detail)
+```
+
+```
+OPEN     agent locks a spending cap into a channel (real USDC — or private via the ZK layer)
+STREAM   the on-chain meter accrues per second in real USDC; vouchers off-chain add privacy
+SETTLE   service withdraws / stops (base) or submits the highest voucher (privacy)
+RECLAIM  the agent is refunded the unspent tail — no funds can be stranded
 ```
 
 The USDC backing the channel is bridged in from another chain (Base / Arbitrum)
@@ -45,15 +56,33 @@ anywhere.
 
 ## It runs live on Arc testnet
 
-Not a mock — deployed and settled on **real Arc testnet** (chainId 5042002),
-with both ZK proofs verified on-chain by **Arc's BN254 pairing precompiles**:
+Not a mock — deployed and settled on **real Arc testnet** (chainId 5042002).
+
+### Base rail — real per-second USDC (`StreamPay`)
+Contract [`0x469305823f9796f973363F48a508a47309B2D92c`](https://testnet.arcscan.app/address/0x469305823f9796f973363F48a508a47309B2D92c).
+Payer `0x20D3…1796`, payee (distinct address) `0xdAE1…9970`. Cap 0.005 USDC at
+$0.0001/sec, value-conservation invariant asserted on-chain from `Withdrawn` +
+`Stopped` events (`payee_paid + payer_refund == deposit`).
+
+| Step | Real tx (on [arcscan](https://testnet.arcscan.app)) |
+|------|------|
+| Open — fund 0.005 USDC as `msg.value` | [`0x8ec9165f…`](https://testnet.arcscan.app/tx/0x8ec9165f7c8c2ff701e35dfb19fed2db315b9369b12f28483790dbd7a9634412) |
+| Withdraw — mid-stream 0.0011 USDC → service | [`0xf1eb8d0f…`](https://testnet.arcscan.app/tx/0xf1eb8d0f8dbdb583c03ccfafe2ef69d9d611a220e4641885ff382c7cc4fb1e89) |
+| Pause · Resume · Stop | [`0x8070…`](https://testnet.arcscan.app/tx/0x8070d5f938e8c97ee44176e4bf57ef1f53b2182be9f86b1a27d21b2585fef849) · [`0x9003…`](https://testnet.arcscan.app/tx/0x9003736530439cc13a76c9eb6bf9d4123eb7bd548ade015a6f9667b1f93423f0) · [`0x8ebc…`](https://testnet.arcscan.app/tx/0x8ebc27ad2771e8e94f8829216cdc3facfcdf9c0631c1b89516110cb1bf17ee5b) |
+| Stop paid: 0.0013 USDC → service, 0.0026 USDC refunded to agent | (from `Stopped` event) |
+
+Total streamed to the service address: **0.0024 USDC** over the run, verifiable
+on arcscan. Full run log: [docs/testnet-transactions.md](docs/testnet-transactions.md).
+
+### Privacy layer — shielded net (`agent-service`)
+Both ZK proofs verified on-chain by **Arc's BN254 pairing precompiles**:
 
 | What | Transaction (on [arcscan](https://testnet.arcscan.app)) |
 |------|------|
 | Open a payment channel (ZK proof) | `0x6e87f408…` — block 50,297,330 |
 | Settle 100 requests' net (ZK proof) | `0xec66753c…` — block 50,297,357 |
 
-And a **real cross-chain USDC transfer** via Circle CCTP:
+### Cross-chain funding — real USDC via Circle CCTP
 
 | What | Chain | Transaction |
 |------|-------|------|
@@ -69,21 +98,28 @@ npm install
 cd contracts/arc && forge build && cd ../..
 npm run circuits:build:arc && npx tsx scripts/sync-arc-verifiers.ts
 
-# an AI agent buys a service across 100 metered requests, then settles the net.
-# runs on a local anvil EVM (no funds needed) — shows each request + payment:
-npm run agent-service-demo
+# the base real-USDC rail: agent streams real native USDC at ~$0.0001/sec on Arc,
+# pauses, resumes, withdraws mid-stream, then stops with refund — every step
+# settled on-chain in real value, with real tx hashes on arcscan:
+npm run streampay-demo             # local anvil (real EVM)
+npm run streampay-demo:arc         # REAL Arc testnet (real USDC, real hashes)
 
-# the same, live on real Arc testnet (needs a faucet-funded key):
-npm run agent-service-demo:arc
+# the privacy layer on top: agent buys a service across 100 metered requests
+# via ZK-shielded vouchers, then settles the private net with one proof:
+npm run agent-service-demo         # local anvil (no funds needed)
+npm run agent-service-demo:arc     # live on real Arc testnet
 REQUESTS=1000 npm run agent-service-demo:arc     # scale to 1000 requests
 
 # the literal cross-chain leg: burn USDC on Base Sepolia, mint on Arc via CCTP:
 BASE_SEPOLIA_PRIVATE_KEY=0x…  npm run cctp-bridge:arc
 ```
 
-`agent-service-demo` prints exactly what you'd want to see — per request, the
-**prompt** the agent sent, the **payment** it authorized, and the **service's
-response** — then one on-chain settlement for the whole session.
+`streampay-demo` is the honest base rail: real native USDC moves on-chain by the
+second at a sub-cent rate, with pause / resume / mid-stream withdraw / stop-and-
+refund, and a value-conservation invariant checked at the end (payee-paid +
+payer-refund == deposit). `agent-service-demo` sits on top: it prints, per
+request, the **prompt** the agent sent, the **payment** it authorized, and the
+**service's response** — then one shielded settlement for the whole session.
 
 ---
 

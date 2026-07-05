@@ -16,6 +16,32 @@ document covers three things: **what** it is, **how** it was built, and the
 
 ## 1. What it is
 
+There are **two rails**, kept intentionally separate:
+
+**Base rail — `StreamPay.sol` (real native USDC, on-chain per-second meter).**
+On Arc, USDC is the native gas token, so the streaming primitive is a payable
+escrow that streams `msg.value` at a fixed rate. The agent `open`s a stream with
+a real USDC cap and a rate (e.g. **$0.0001 / second**); the payee's on-chain
+`earned()` meter grows every second; the payee can `withdraw` accrued USDC
+mid-stream; the payer can `pause` / `resume` at any time; and `stop` pays the
+net and refunds the tail. **Continuous authorization of a rate**, not a
+signature per tick. This is the hackathon's core requirement — real amounts,
+real hashes — met literally.
+
+**Privacy layer — shielded stream (vouchers + one ZK settle).**
+Instead of the payee pulling every second on-chain, the payer signs off-chain
+**vouchers** (`{channelId, cumulative, seq}`, EdDSA) and only the private net
+settles through a ZK proof against a shielded pool. Individual payments are
+invisible; only an auditable receipt is revealed. This composes on top of the
+base rail — the money is the same real USDC, the difference is who sees the
+per-tick detail.
+
+The rest of this doc walks the privacy layer's shape (open → stream → settle →
+reclaim). For the base rail, see §4 (`streampay-demo`) and
+`contracts/arc/src/StreamPay.sol` (14 Foundry tests covering accrual/sec, cap
+ceiling, real withdraw, pause freezes, resume, stop pays+refunds, value
+conservation, access control — all green).
+
 An AI agent consumes a paid service (an API, a data feed, an inference
 endpoint) and pays **per request** — amounts as small as a fraction of a cent —
 without a transaction per call. The mechanic:
@@ -167,7 +193,20 @@ cd contracts/arc && forge build && cd ../..
 npm run circuits:build:arc && npx tsx scripts/sync-arc-verifiers.ts
 ```
 
-### Demo A — local (fast, no funds needed)
+### Demo A0 — the base rail: real per-second USDC on Arc
+```bash
+npm run streampay-demo            # local anvil (real EVM)
+npm run streampay-demo:arc        # REAL Arc testnet, real USDC, real hashes
+```
+Deploys `StreamPay.sol`, opens a stream at **$0.0001 / second** funded with real
+native USDC, streams for a few seconds while printing the on-chain `earned()`
+meter, does a **mid-stream withdraw** (real balance delta), **pauses** and shows
+the meter freeze, **resumes**, then **stops** — paying the payee the net and
+refunding the agent the unspent tail. The final line asserts the value-
+conservation invariant on-chain: `payee_paid + payer_refund == deposit`, and
+prints the arcscan links for open / withdraw / pause / resume / stop.
+
+### Demo A — local privacy layer (fast, no funds needed)
 ```bash
 npm run agent-service-demo      # spins up a local anvil EVM node
 ```
