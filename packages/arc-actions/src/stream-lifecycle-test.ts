@@ -235,6 +235,7 @@ async function main() {
   // pool assoc root must match this proof's assoc root
   await (await (pool.connect(admin) as any).setAssociationRoot(BigInt(openResult2.publicSignals[4]), { nonce: aNonce++ })).wait();
   await (await (escrow.connect(admin) as any).open(openResult2.proof, openResult2.publicSignals.map((s) => BigInt(s)), { nonce: aNonce++ })).wait();
+  poolLeaves.push(openResult2.changeCoin.commitment); // open #2 inserts a change note too
   check("real open() #2 records channel", (await (escrow as any).getChannel(channelId2)).opened === true);
 
   // reclaim before timeout -> revert (invariant #6)
@@ -253,9 +254,62 @@ async function main() {
 
   const leavesBeforeReclaim: bigint = BigInt(await (pool as any).getLeafCount());
   await (await (escrow.connect(admin) as any).reclaim(channelId2, { nonce: aNonce++ })).wait();
+  poolLeaves.push(openResult2.reclaimCoin.commitment); // reclaim inserts the reclaim note
   const ch2 = await (escrow as any).getChannel(channelId2);
   check("invariant #6: reclaim after timeout consumes channel + inserts reclaim note",
     ch2.consumed === true && BigInt(await (pool as any).getLeafCount()) === leavesBeforeReclaim + 1n);
+
+  // =========================================================
+  // LIFECYCLE 3: batch-close 2 channels via settleBatch (Phase 5 streaming relayer)
+  // =========================================================
+  const { STREAM_ESCROW_ABI } = await import("./abi.js");
+  const inCoinA = await generateCoinBn254(400n, usdcAssetId);
+  const inCoinB = await generateCoinBn254(400n, usdcAssetId);
+  await seedCommitment(inCoinA.commitment, 400n, "seedA");
+  await seedCommitment(inCoinB.commitment, 400n, "seedB");
+
+  const chA = 111000n, chB = 222000n, capAB = 200n;
+  const expiryAB = BigInt((await provider.getBlockNumber()) + 1000);
+
+  const openA = await buildStreamOpenProofBn254({
+    inCoin: inCoinA, stateLeaves: poolLeaves.slice(), stateIndex: poolLeaves.indexOf(inCoinA.commitment),
+    assocLabels: [inCoinA.label], labelIndex: 0,
+    channelId: chA, payerAx: payerKey.Ax, payerAy: payerKey.Ay, cap: capAB, expiry: expiryAB, poolId: POOL_ID, chainId: CHAIN_ID,
+  });
+  await (await (pool.connect(admin) as any).setAssociationRoot(BigInt(openA.publicSignals[4]), { nonce: aNonce++ })).wait();
+  await (await (escrow.connect(admin) as any).open(openA.proof, openA.publicSignals.map((s) => BigInt(s)), { nonce: aNonce++ })).wait();
+  poolLeaves.push(openA.changeCoin.commitment);
+
+  const openB = await buildStreamOpenProofBn254({
+    inCoin: inCoinB, stateLeaves: poolLeaves.slice(), stateIndex: poolLeaves.indexOf(inCoinB.commitment),
+    assocLabels: [inCoinB.label], labelIndex: 0,
+    channelId: chB, payerAx: payerKey.Ax, payerAy: payerKey.Ay, cap: capAB, expiry: expiryAB, poolId: POOL_ID, chainId: CHAIN_ID,
+  });
+  const assocRootB = BigInt(openB.publicSignals[4]);
+  await (await (pool.connect(admin) as any).setAssociationRoot(assocRootB, { nonce: aNonce++ })).wait();
+  await (await (escrow.connect(admin) as any).open(openB.proof, openB.publicSignals.map((s) => BigInt(s)), { nonce: aNonce++ })).wait();
+  poolLeaves.push(openB.changeCoin.commitment);
+  check("batch: both channels opened (real proofs)",
+    (await (escrow as any).getChannel(chA)).opened === true && (await (escrow as any).getChannel(chB)).opened === true);
+
+  // sign a voucher per channel; build both settle proofs bound to the pool's
+  // current association root (assocRootB, set by the last open).
+  const vA = await signVoucher(payerKey, chA, 120n, 1);
+  const vB = await signVoucher(payerKey, chB, 80n, 1);
+  const settleA = await buildStreamSettleProofBn254({ voucher: vA, cap: capAB, assetId: usdcAssetId, associationRoot: assocRootB, poolId: POOL_ID, chainId: CHAIN_ID });
+  const settleB = await buildStreamSettleProofBn254({ voucher: vB, cap: capAB, assetId: usdcAssetId, associationRoot: assocRootB, poolId: POOL_ID, chainId: CHAIN_ID });
+
+  const leavesBeforeBatch: bigint = BigInt(await (pool as any).getLeafCount());
+  const escrowBatch = new (await import("ethers")).Contract(escrowAddr, STREAM_ESCROW_ABI as unknown as string[], admin);
+  await (await escrowBatch.settleBatch(
+    [settleA.proof, settleB.proof],
+    [settleA.publicSignals.map((s) => BigInt(s)), settleB.publicSignals.map((s) => BigInt(s))],
+    { nonce: aNonce++ }
+  )).wait();
+  check("batch: settleBatch closes both channels (real proofs)",
+    (await (escrow as any).getChannel(chA)).consumed === true && (await (escrow as any).getChannel(chB)).consumed === true);
+  check("batch: settleBatch inserts 4 notes (2 per channel)",
+    BigInt(await (pool as any).getLeafCount()) === leavesBeforeBatch + 4n);
 
   finish();
 }
