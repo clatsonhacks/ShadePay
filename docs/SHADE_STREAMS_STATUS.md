@@ -62,6 +62,20 @@ cd contracts/arc && forge test  # 75/75 — includes 18 StreamEscrow tests
 npm run stream-lifecycle:test   # 15/15 — full lifecycle, real proofs, real chain, invariants #4/#6/#8
 ```
 
-## Remaining (Phase 5-6, not yet started)
-- **Phase 5**: x402 front door (HTTP 402 opens a channel), streaming relayer that batches settlements, Circle Gateway batch-settlement spike.
+## Phase 5 — x402 front door + streaming relayer + Gateway batching ✅ COMPLETE (Gateway = documented spike)
+
+| Piece | Where | Test |
+|-------|-------|------|
+| x402 voucher-gated middleware | `apps/api/src/x402.ts` | 12/12 (`npm run x402:test`) |
+| `StreamEscrow.settleBatch` | `contracts/arc/src/StreamEscrow.sol` | 4 tests in the 22-test StreamEscrow suite |
+| Streaming relayer (batch policy + submit) | `apps/relayer/src/stream-relayer.ts` | 6/6 (`npm run stream-relayer:test`) |
+| `STREAM_SETTLE_BATCH` relayer job | `apps/relayer/src/worker.ts` | — |
+| Real-proof batch settle | `stream-lifecycle-test.ts` scenario 3 | 18/18 (`npm run stream-lifecycle:test`) |
+| Circle Gateway batch settlement | `docs/GATEWAY_SPIKE.md` | 🔲 documented seam — blocked on real Gateway endpoints (honest gap) |
+
+- **x402**: no voucher → HTTP 402 + channel-open instructions; a voucher whose cumulative reached the required amount (signed by the channel's payer, within cap, open + non-expired) → served. Signature verified via the voucher SDK.
+- **settleBatch**: closes N channels in one tx, proof-gated per channel, atomic on any bad member — cheaper than N individual settles (Foundry-measured).
+- **Gateway**: on-Arc batching is done; the gasless/cross-chain Gateway variant is a documented integration seam (`submitSettlementBatch`), not built — needs real Circle endpoints, same class of external-address gap as Arc CCTP.
+
+## Remaining (Phase 6, not yet started)
 - **Phase 6**: per-stream Shade View receipts, agent layer (payer/seller/broker), compliance-registry decision.
