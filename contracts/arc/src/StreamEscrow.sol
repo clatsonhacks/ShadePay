@@ -163,6 +163,27 @@ contract StreamEscrow is AccessControl, Pausable {
     // [9] cumulative [10] assetId
     // ============================================================
     function settle(Groth16Proof calldata proof, uint256[11] calldata pub) external whenNotPaused {
+        _settle(proof, pub);
+    }
+
+    /**
+     * @notice Settle many channels in one transaction. The streaming relayer
+     *         batches closes this way to amortize the base tx cost (and warm
+     *         storage) across N settlements instead of paying it N times — the
+     *         whole economic point of nanopayment streaming. Every settle is
+     *         independently proof-gated exactly as the single-settle path; the
+     *         relayer gains no special privilege, it just submits N valid proofs
+     *         together. Reverts atomically if any one settle is invalid.
+     */
+    function settleBatch(Groth16Proof[] calldata proofs, uint256[11][] calldata pubs) external whenNotPaused {
+        uint256 n = proofs.length;
+        require(n == pubs.length, "length mismatch");
+        for (uint256 i = 0; i < n; i++) {
+            _settle(proofs[i], pubs[i]);
+        }
+    }
+
+    function _settle(Groth16Proof calldata proof, uint256[11] calldata pub) internal {
         uint256 channelId = pub[5];
         Channel storage ch = channels[channelId];
         if (!ch.opened) revert ChannelNotOpen();
