@@ -11,3 +11,4 @@ export * from "./notes.js";
 export * from "./intents.js";
 export * from "./wallets.js";
 export * from "./mpc.js";
+export * from "./streams.js";
