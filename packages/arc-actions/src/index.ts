@@ -186,3 +186,17 @@ export async function arcInvoke(opts: {
 export function walletFromPrivateKey(privateKey: string, network: Network): Wallet {
   return new Wallet(privateKey, providerFor(network));
 }
+
+/**
+ * TransactionRequest carries bigint fields (gasLimit, value, chainId, fee
+ * fields) that JSON.stringify cannot serialize directly. Converts them to
+ * decimal strings for HTTP transport; the receiving wallet/ethers.js accepts
+ * BigNumberish strings interchangeably with bigints when signing.
+ */
+export function serializeUnsignedTx(tx: TransactionRequest): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(tx)) {
+    out[key] = typeof value === "bigint" ? value.toString() : value;
+  }
+  return out;
+}
