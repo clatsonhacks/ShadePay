@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+// @ts-ignore - snarkjs ships no type declarations
 import * as snarkjs from "snarkjs";
 // @ts-ignore - circomlibjs has no types
 import { buildPoseidon } from "circomlibjs";
