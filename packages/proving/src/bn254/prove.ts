@@ -218,6 +218,189 @@ export type DepositBindingBn254 = {
   chainId: bigint;
 };
 
+// ============================================================
+// mpc_settlement_bn254 — two-party same-asset committee match
+// ============================================================
+export type MpcSettlementInputBn254 = {
+  coinA: Bn254Coin;
+  coinB: Bn254Coin; // same assetId as coinA (same-asset crossing)
+  outCoinA: Bn254Coin; // new note owned by party B's counterparty flow (per Stellar semantics: A's output goes to B)
+  outCoinB: Bn254Coin;
+  stateLeaves: bigint[]; // must include coinA.commitment and coinB.commitment
+  stateIndexA: number;
+  stateIndexB: number;
+  assocLabels: bigint[]; // must include coinA.label and coinB.label
+  labelIndexA: number;
+  labelIndexB: number;
+  matchedAmount7dp: bigint;
+  batchHash: bigint; // pre-reduced field element (sha256(batch) >> 8), matching the contract's hashToField
+  poolId: bigint;
+  chainId: bigint;
+  deadlineLedger: bigint;
+};
+
+export async function buildMpcSettlementProofBn254(p: MpcSettlementInputBn254): Promise<Bn254ProofResult> {
+  if (p.coinA.assetId !== p.coinB.assetId) throw new Error("mpc_settlement is same-asset only; use buildMpcPricedSettlementProofBn254 for cross-asset");
+  // the circuit binds a single `assetId` public signal into BOTH output
+  // commitments (same-asset crossing) — an output coin generated under a
+  // different assetId would silently produce a mismatched commitment.
+  if (p.outCoinA.assetId !== p.coinA.assetId || p.outCoinB.assetId !== p.coinA.assetId) {
+    throw new Error("outCoinA/outCoinB must share coinA/coinB's assetId (mpc_settlement is same-asset for inputs AND outputs)");
+  }
+  if (p.outCoinA.value + p.outCoinB.value !== p.matchedAmount7dp * 2n) {
+    throw new Error("value conservation violated: outCoinA.value + outCoinB.value must equal matchedAmount7dp * 2");
+  }
+  if (p.stateLeaves[p.stateIndexA] !== p.coinA.commitment) throw new Error("stateLeaves[stateIndexA] must equal coinA.commitment");
+  if (p.stateLeaves[p.stateIndexB] !== p.coinB.commitment) throw new Error("stateLeaves[stateIndexB] must equal coinB.commitment");
+  if (p.assocLabels[p.labelIndexA] !== p.coinA.label) throw new Error("assocLabels[labelIndexA] must equal coinA.label");
+  if (p.assocLabels[p.labelIndexB] !== p.coinB.label) throw new Error("assocLabels[labelIndexB] must equal coinB.label");
+
+  const stateTree = await buildMerkleTree(p.stateLeaves, TREE_DEPTH);
+  const proofA = getMerkleProof(stateTree, p.stateIndexA);
+  const proofB = getMerkleProof(stateTree, p.stateIndexB);
+  const assocTree = await buildMerkleTree(p.assocLabels, ASSOCIATION_DEPTH);
+  const assocProofA = getMerkleProof(assocTree, p.labelIndexA);
+  const assocProofB = getMerkleProof(assocTree, p.labelIndexB);
+
+  const input = {
+    stateRoot: stateTree.root.toString(),
+    associationRoot: assocTree.root.toString(),
+    batchHash: p.batchHash.toString(),
+    poolId: p.poolId.toString(),
+    chainId: p.chainId.toString(),
+    matchedAmount7dp: p.matchedAmount7dp.toString(),
+    deadlineLedger: p.deadlineLedger.toString(),
+    assetId: p.coinA.assetId.toString(),
+
+    labelA: p.coinA.label.toString(),
+    valueA: p.coinA.value.toString(),
+    nullifierA: p.coinA.nullifier.toString(),
+    secretA: p.coinA.secret.toString(),
+    stateIndexA: p.stateIndexA.toString(),
+    stateSiblingsA: proofA.siblings.map(String),
+    labelIndexA: p.labelIndexA.toString(),
+    labelSiblingsA: assocProofA.siblings.map(String),
+    outValueA: p.outCoinA.value.toString(),
+    outLabelA: p.outCoinA.label.toString(),
+    outNullifierA: p.outCoinA.nullifier.toString(),
+    outSecretA: p.outCoinA.secret.toString(),
+
+    labelB: p.coinB.label.toString(),
+    valueB: p.coinB.value.toString(),
+    nullifierB: p.coinB.nullifier.toString(),
+    secretB: p.coinB.secret.toString(),
+    stateIndexB: p.stateIndexB.toString(),
+    stateSiblingsB: proofB.siblings.map(String),
+    labelIndexB: p.labelIndexB.toString(),
+    labelSiblingsB: assocProofB.siblings.map(String),
+    outValueB: p.outCoinB.value.toString(),
+    outLabelB: p.outCoinB.label.toString(),
+    outNullifierB: p.outCoinB.nullifier.toString(),
+    outSecretB: p.outCoinB.secret.toString(),
+  };
+
+  return proveBn254Circuit("mpc_settlement_bn254", input);
+}
+
+// ============================================================
+// mpc_priced_settlement_bn254 — priced cross-asset committee match
+// ============================================================
+export type MpcPricedSettlementInputBn254 = {
+  coinA: Bn254Coin; // spends assetX (inputAssetA); note value === matchedAmountA
+  coinB: Bn254Coin; // spends assetY (inputAssetB); note value === matchedAmountB
+  outCoinA: Bn254Coin; // party A receives assetY (outputAssetA), value === matchedAmountB
+  outCoinB: Bn254Coin; // party B receives assetX (outputAssetB), value === matchedAmountA
+  stateLeaves: bigint[];
+  stateIndexA: number;
+  stateIndexB: number;
+  assocLabels: bigint[];
+  labelIndexA: number;
+  labelIndexB: number;
+  matchedAmountA: bigint;
+  matchedAmountB: bigint;
+  priceScaled: bigint;
+  priceScale?: bigint; // defaults to 1e9, matching the contract's hard-locked PRICE_SCALE
+  minOutputA: bigint;
+  minOutputB: bigint;
+  batchHash: bigint;
+  poolId: bigint;
+  chainId: bigint;
+  deadlineLedger: bigint;
+};
+
+export async function buildMpcPricedSettlementProofBn254(p: MpcPricedSettlementInputBn254): Promise<Bn254ProofResult> {
+  const priceScale = p.priceScale ?? 1_000_000_000n;
+  if (p.coinA.assetId === p.coinB.assetId) throw new Error("mpc_priced_settlement requires a genuine cross-asset pair (coinA.assetId !== coinB.assetId)");
+  if (p.outCoinA.assetId !== p.coinB.assetId) throw new Error("outCoinA.assetId must equal coinB.assetId (party A receives what B spent)");
+  if (p.outCoinB.assetId !== p.coinA.assetId) throw new Error("outCoinB.assetId must equal coinA.assetId (party B receives what A spent)");
+  if (p.coinA.value !== p.matchedAmountA) throw new Error("coinA.value must equal matchedAmountA (no partial fills)");
+  if (p.coinB.value !== p.matchedAmountB) throw new Error("coinB.value must equal matchedAmountB (no partial fills)");
+  if (p.outCoinA.value !== p.matchedAmountB) throw new Error("outCoinA.value must equal matchedAmountB");
+  if (p.outCoinB.value !== p.matchedAmountA) throw new Error("outCoinB.value must equal matchedAmountA");
+  // fixed-point price check mirrored from the circuit: matchedAmountB == floor(matchedAmountA*priceScaled/priceScale)
+  const expectedB = (p.matchedAmountA * p.priceScaled) / priceScale;
+  if (p.matchedAmountB !== expectedB) {
+    throw new Error(`price mismatch: matchedAmountB (${p.matchedAmountB}) must equal floor(matchedAmountA*priceScaled/priceScale) = ${expectedB}`);
+  }
+  if (p.matchedAmountB < p.minOutputA) throw new Error("matchedAmountB is below minOutputA (slippage violation)");
+  if (p.matchedAmountA < p.minOutputB) throw new Error("matchedAmountA is below minOutputB (slippage violation)");
+  if (p.stateLeaves[p.stateIndexA] !== p.coinA.commitment) throw new Error("stateLeaves[stateIndexA] must equal coinA.commitment");
+  if (p.stateLeaves[p.stateIndexB] !== p.coinB.commitment) throw new Error("stateLeaves[stateIndexB] must equal coinB.commitment");
+  if (p.assocLabels[p.labelIndexA] !== p.coinA.label) throw new Error("assocLabels[labelIndexA] must equal coinA.label");
+  if (p.assocLabels[p.labelIndexB] !== p.coinB.label) throw new Error("assocLabels[labelIndexB] must equal coinB.label");
+
+  const stateTree = await buildMerkleTree(p.stateLeaves, TREE_DEPTH);
+  const proofA = getMerkleProof(stateTree, p.stateIndexA);
+  const proofB = getMerkleProof(stateTree, p.stateIndexB);
+  const assocTree = await buildMerkleTree(p.assocLabels, ASSOCIATION_DEPTH);
+  const assocProofA = getMerkleProof(assocTree, p.labelIndexA);
+  const assocProofB = getMerkleProof(assocTree, p.labelIndexB);
+
+  const input = {
+    stateRoot: stateTree.root.toString(),
+    associationRoot: assocTree.root.toString(),
+    batchHash: p.batchHash.toString(),
+    poolId: p.poolId.toString(),
+    chainId: p.chainId.toString(),
+    deadlineLedger: p.deadlineLedger.toString(),
+    inputAssetA: p.coinA.assetId.toString(),
+    outputAssetA: p.outCoinA.assetId.toString(),
+    inputAssetB: p.coinB.assetId.toString(),
+    outputAssetB: p.outCoinB.assetId.toString(),
+    matchedAmountA: p.matchedAmountA.toString(),
+    matchedAmountB: p.matchedAmountB.toString(),
+    priceScaled: p.priceScaled.toString(),
+    priceScale: priceScale.toString(),
+    minOutputA: p.minOutputA.toString(),
+    minOutputB: p.minOutputB.toString(),
+
+    labelA: p.coinA.label.toString(),
+    nullifierA: p.coinA.nullifier.toString(),
+    secretA: p.coinA.secret.toString(),
+    stateIndexA: p.stateIndexA.toString(),
+    stateSiblingsA: proofA.siblings.map(String),
+    labelIndexA: p.labelIndexA.toString(),
+    labelSiblingsA: assocProofA.siblings.map(String),
+
+    labelB: p.coinB.label.toString(),
+    nullifierB: p.coinB.nullifier.toString(),
+    secretB: p.coinB.secret.toString(),
+    stateIndexB: p.stateIndexB.toString(),
+    stateSiblingsB: proofB.siblings.map(String),
+    labelIndexB: p.labelIndexB.toString(),
+    labelSiblingsB: assocProofB.siblings.map(String),
+
+    outLabelA: p.outCoinA.label.toString(),
+    outNullifierA: p.outCoinA.nullifier.toString(),
+    outSecretA: p.outCoinA.secret.toString(),
+    outLabelB: p.outCoinB.label.toString(),
+    outNullifierB: p.outCoinB.nullifier.toString(),
+    outSecretB: p.outCoinB.secret.toString(),
+  };
+
+  return proveBn254Circuit("mpc_priced_settlement_bn254", input);
+}
+
 export async function buildDepositProofBn254(coin: Bn254Coin, b: DepositBindingBn254): Promise<Bn254ProofResult> {
   if (coin.value > b.amount7dp) {
     throw new Error("note value exceeds minted amount7dp (anti-inflation check would fail in-circuit)");

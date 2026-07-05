@@ -10,6 +10,8 @@ import {
   buildTransferProofBn254,
   buildWithdrawProofBn254,
   buildDepositProofBn254,
+  buildMpcSettlementProofBn254,
+  buildMpcPricedSettlementProofBn254,
   OP_WITHDRAW_PUBLIC,
 } from "./prove.js";
 
@@ -151,6 +153,84 @@ async function main() {
     check("deposit rejects anti-inflation violation", false, "should have thrown");
   } catch (e) {
     check("deposit rejects anti-inflation violation", /exceeds minted amount/.test(String(e)), String(e).slice(0, 150));
+  }
+
+  // ---- mpc_settlement_bn254: two-party same-asset committee match ----
+  const XLM_ASSET = 222n;
+  const mpcCoinA = await generateCoinBn254(500n, XLM_ASSET);
+  const mpcCoinB = await generateCoinBn254(500n, XLM_ASSET);
+  const mpcStateLeaves = [mpcCoinA.commitment, mpcCoinB.commitment];
+  const mpcAssocLabels = [mpcCoinA.label, mpcCoinB.label];
+  const matchedAmount = 500n;
+  const mpcOutA = await generateCoinBn254(matchedAmount, XLM_ASSET);
+  const mpcOutB = await generateCoinBn254(matchedAmount, XLM_ASSET);
+  try {
+    const result = await buildMpcSettlementProofBn254({
+      coinA: mpcCoinA, coinB: mpcCoinB, outCoinA: mpcOutA, outCoinB: mpcOutB,
+      stateLeaves: mpcStateLeaves, stateIndexA: 0, stateIndexB: 1,
+      assocLabels: mpcAssocLabels, labelIndexA: 0, labelIndexB: 1,
+      matchedAmount7dp: matchedAmount, batchHash: 42n, poolId: POOL_ID, chainId: CHAIN_ID, deadlineLedger: 999999n,
+    });
+    check("mpc_settlement proof generated", true, `${result.publicSignals.length} public signals`);
+    check("mpc_settlement proof verifies locally", result.verified === true);
+  } catch (e) {
+    check("mpc_settlement proof generated", false, String(e).slice(0, 300));
+  }
+
+  // adversarial: value conservation violated must be rejected before proving.
+  try {
+    const badOut = await generateCoinBn254(999n, XLM_ASSET); // wrong total
+    await buildMpcSettlementProofBn254({
+      coinA: mpcCoinA, coinB: mpcCoinB, outCoinA: badOut, outCoinB: mpcOutB,
+      stateLeaves: mpcStateLeaves, stateIndexA: 0, stateIndexB: 1,
+      assocLabels: mpcAssocLabels, labelIndexA: 0, labelIndexB: 1,
+      matchedAmount7dp: matchedAmount, batchHash: 42n, poolId: POOL_ID, chainId: CHAIN_ID, deadlineLedger: 999999n,
+    });
+    check("mpc_settlement rejects broken value conservation", false, "should have thrown");
+  } catch (e) {
+    check("mpc_settlement rejects broken value conservation", /value conservation/.test(String(e)), String(e).slice(0, 150));
+  }
+
+  // ---- mpc_priced_settlement_bn254: priced cross-asset crossing ----
+  const priceScale = 1_000_000_000n;
+  const priceScaled = 2_000_000_000n; // 2.0 assetY per assetX
+  const matchedAmountA = 100n;
+  const matchedAmountB = (matchedAmountA * priceScaled) / priceScale; // 200n
+  const pricedCoinA = await generateCoinBn254(matchedAmountA, USDC_ASSET); // spends assetX
+  const pricedCoinB = await generateCoinBn254(matchedAmountB, XLM_ASSET); // spends assetY
+  const pricedOutA = await generateCoinBn254(matchedAmountB, XLM_ASSET); // A receives assetY
+  const pricedOutB = await generateCoinBn254(matchedAmountA, USDC_ASSET); // B receives assetX
+  const pricedStateLeaves = [pricedCoinA.commitment, pricedCoinB.commitment];
+  const pricedAssocLabels = [pricedCoinA.label, pricedCoinB.label];
+  try {
+    const result = await buildMpcPricedSettlementProofBn254({
+      coinA: pricedCoinA, coinB: pricedCoinB, outCoinA: pricedOutA, outCoinB: pricedOutB,
+      stateLeaves: pricedStateLeaves, stateIndexA: 0, stateIndexB: 1,
+      assocLabels: pricedAssocLabels, labelIndexA: 0, labelIndexB: 1,
+      matchedAmountA, matchedAmountB, priceScaled,
+      minOutputA: 1n, minOutputB: 1n,
+      batchHash: 7n, poolId: POOL_ID, chainId: CHAIN_ID, deadlineLedger: 999999n,
+    });
+    check("mpc_priced_settlement proof generated", true, `${result.publicSignals.length} public signals`);
+    check("mpc_priced_settlement proof verifies locally", result.verified === true);
+  } catch (e) {
+    check("mpc_priced_settlement proof generated", false, String(e).slice(0, 300));
+  }
+
+  // adversarial: same-asset pair must be rejected before proving.
+  try {
+    await buildMpcPricedSettlementProofBn254({
+      coinA: pricedCoinA, coinB: await generateCoinBn254(matchedAmountB, USDC_ASSET), // same asset as A
+      outCoinA: pricedOutA, outCoinB: pricedOutB,
+      stateLeaves: pricedStateLeaves, stateIndexA: 0, stateIndexB: 1,
+      assocLabels: pricedAssocLabels, labelIndexA: 0, labelIndexB: 1,
+      matchedAmountA, matchedAmountB, priceScaled,
+      minOutputA: 1n, minOutputB: 1n,
+      batchHash: 7n, poolId: POOL_ID, chainId: CHAIN_ID, deadlineLedger: 999999n,
+    });
+    check("mpc_priced_settlement rejects same-asset pair", false, "should have thrown");
+  } catch (e) {
+    check("mpc_priced_settlement rejects same-asset pair", /cross-asset/.test(String(e)), String(e).slice(0, 150));
   }
 
   finish();
