@@ -16,6 +16,8 @@ const MAP: { circuit: string; contract: string; file: string }[] = [
   { circuit: "deposit_note_mint_bn254",     contract: "DepositVerifier",            file: "DepositVerifier.sol" },
   { circuit: "mpc_settlement_bn254",        contract: "MpcSettlementVerifier",      file: "MpcSettlementVerifier.sol" },
   { circuit: "mpc_priced_settlement_bn254", contract: "MpcPricedSettlementVerifier", file: "MpcPricedSettlementVerifier.sol" },
+  { circuit: "stream_open_bn254",           contract: "StreamOpenVerifier",         file: "StreamOpenVerifier.sol" },
+  { circuit: "stream_settle_bn254",         contract: "StreamSettleVerifier",       file: "StreamSettleVerifier.sol" },
 ];
 
 let ok = 0;

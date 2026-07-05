@@ -41,6 +41,8 @@ const CIRCUITS: { name: string; nPublic: number; minPower: number }[] = [
   { name: "deposit_note_mint_bn254",      nPublic: 14, minPower: 14 },
   { name: "mpc_settlement_bn254",         nPublic: 12, minPower: 15 },
   { name: "mpc_priced_settlement_bn254",  nPublic: 20, minPower: 15 },
+  { name: "stream_open_bn254",            nPublic: 13, minPower: 14 }, // 1 out + 12 in
+  { name: "stream_settle_bn254",          nPublic: 11, minPower: 14 }, // 2 out + 9 in
 ];
 
 const checks: CheckResult[] = [];
