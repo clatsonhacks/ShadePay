@@ -23,6 +23,7 @@
     "circuits:test:arc": "tsx scripts/circuits-test-arc.ts",
     "arc:sync-verifiers": "tsx scripts/sync-arc-verifiers.ts",
     "proving-bn254:test": "tsx packages/proving/src/bn254/prove-bn254-test.ts",
+    "arc-actions:test": "tsx packages/arc-actions/src/arc-actions-test.ts",
     "contracts:build:arc": "cd contracts/arc && forge build",
     "contracts:test:arc": "cd contracts/arc && forge test -vv",
     "proofs:test": "tsx apps/prover/src/proofs-test.ts",

@@ -1,0 +1,13 @@
+{
+  "name": "@shade/arc-actions",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./abi": "./src/abi.ts"
+  },
+  "dependencies": {
+    "ethers": "^6.13.5"
+  }
+}
