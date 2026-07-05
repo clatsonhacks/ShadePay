@@ -154,3 +154,45 @@ The ZK relayer path (Phase C) generates the proof automatically when `circuits/m
 | Contract | Address |
 |----------|---------|
 | ShieldedPool (pre-ZK, no upgrade fn) | `CCSC4FB3ZL6TV7FEMRK3QUF5LALTSI5NQFCBH4Q2VMCQMSTQK6HP2XFQ` |
+
+---
+
+## Arc Testnet — StreamPay base rail (2026-07-05)
+
+**Live run of `npm run streampay-demo:arc`** — real native-USDC per-second
+streaming on Arc testnet (chainId 5042002). All 10 steps executed end-to-end,
+value-conservation invariant asserted from on-chain events:
+`payee_paid + payer_refund == deposit (0.005 USDC)`.
+
+**Deployed contract:** [`StreamPay 0x469305823f9796f973363F48a508a47309B2D92c`](https://testnet.arcscan.app/address/0x469305823f9796f973363F48a508a47309B2D92c)
+
+**Parties (three distinct addresses):**
+| Role  | Address | Explorer |
+|-------|---------|----------|
+| Payer (agent, faucet-funded)  | `0x20D3688967b8d93050C1a1062d7aE6567d691796` | [arcscan](https://testnet.arcscan.app/address/0x20D3688967b8d93050C1a1062d7aE6567d691796) |
+| Payee (service, fresh keypair) | `0xdAE126fb68B1ee0569B53a022c9Be4D224089970` | [arcscan](https://testnet.arcscan.app/address/0xdAE126fb68B1ee0569B53a022c9Be4D224089970) |
+| Escrow (StreamPay contract)   | `0x469305823f9796f973363F48a508a47309B2D92c` | [arcscan](https://testnet.arcscan.app/address/0x469305823f9796f973363F48a508a47309B2D92c) |
+
+**Stream config:** `streamId = 0x1cade4015be7914215d22105153e1e7bf28b22ef15b085ff8c182009f00077f5`, `rate = 0.0001 USDC / sec`, `cap = 0.005 USDC`.
+
+**Transactions (in order of the streaming lifecycle):**
+
+| Step | Action | Amount / effect | Tx hash |
+|------|--------|-----------------|---------|
+| 1 | Deploy `StreamPay.sol` | new contract on Arc | [`0x86ae9139…`](https://testnet.arcscan.app/tx/0x86ae9139505a673fe0526d19355c5bcd64dd2717d642f797e4418c69a2c5b76d) |
+| 2 | Bootstrap payee (native transfer) | 0.01 USDC to payee for gas | [`0xdce24030…`](https://testnet.arcscan.app/tx/0xdce2403062366fd8fc4fdb213c2ad0df591381a36d0a0edd0a3dd6748be7f163) |
+| 3 | **OPEN** — payer funds escrow | 0.005 USDC locked as `msg.value` | [`0x8ec9165f…`](https://testnet.arcscan.app/tx/0x8ec9165f7c8c2ff701e35dfb19fed2db315b9369b12f28483790dbd7a9634412) |
+| 4 | **WITHDRAW** — mid-stream pull | 0.0011 USDC to payee (`Withdrawn` event) | [`0xf1eb8d0f…`](https://testnet.arcscan.app/tx/0xf1eb8d0f8dbdb583c03ccfafe2ef69d9d611a220e4641885ff382c7cc4fb1e89) |
+| 5 | **PAUSE** — freeze accrual | meter at 0.0016 USDC, no accrual for 4s | [`0x8070d5f9…`](https://testnet.arcscan.app/tx/0x8070d5f938e8c97ee44176e4bf57ef1f53b2182be9f86b1a27d21b2585fef849) |
+| 6 | **RESUME** — restart accrual | meter resumes; +0.0005 USDC over next 4s | [`0x90037365…`](https://testnet.arcscan.app/tx/0x9003736530439cc13a76c9eb6bf9d4123eb7bd548ade015a6f9667b1f93423f0) |
+| 7 | **STOP** — pay net + refund tail | payee +0.0013 USDC, payer refunded 0.0026 USDC (`Stopped` event) | [`0x8ebc27ad…`](https://testnet.arcscan.app/tx/0x8ebc27ad2771e8e94f8829216cdc3facfcdf9c0631c1b89516110cb1bf17ee5b) |
+
+**Invariant (checked from events on step 7):**
+- payee paid across the run: `0.0011 (withdraw) + 0.0013 (stop) = 0.0024 USDC`
+- payer refunded: `0.0026 USDC`
+- sum: `0.005 USDC` == deposited cap ✓
+- escrow contract balance after stop: `0` ✓ (fully drained)
+
+All 7 tx hashes are live on [testnet.arcscan.app](https://testnet.arcscan.app).
+This is real native USDC (Arc's gas token, 18-dec) moving on every step — not
+a mock representation.
