@@ -55,7 +55,8 @@ async function main() {
     anvil = spawn(ANVIL_BIN, ["--port", "8553", "--silent"], { stdio: "ignore" });
   }
   const provider = new JsonRpcProvider(RPC_URL);
-  for (let i = 0; i < 50; i++) { try { await provider.getBlockNumber(); break; } catch { await new Promise((r) => setTimeout(r, 300)); } }
+  let startBlock = 0;
+  for (let i = 0; i < 50; i++) { try { startBlock = await provider.getBlockNumber(); break; } catch { await new Promise((r) => setTimeout(r, 300)); } }
 
   const deployer = new Wallet(DEPLOYER_KEY, provider);
   const net = await provider.getNetwork();
@@ -165,7 +166,9 @@ async function main() {
   // ---- RECEIPT ----
   step(6, "RECEIPT — reconstructed from on-chain events (audit invariant #8)");
   const { fetchChannelReceipt } = await import("./index.js");
-  const receipt = await fetchChannelReceipt({ rpcUrl: RPC_URL }, escrowAddr, channelId);
+  // scan events from the deployment block (Arc's RPC caps eth_getLogs at a
+  // 10k-block range, so scanning from genesis on a 50M-block chain fails).
+  const receipt = await fetchChannelReceipt({ rpcUrl: RPC_URL }, escrowAddr, channelId, startBlock);
   kv("state", receipt.state);
   kv("cap", receipt.cap.toString());
   kv("gross (net settled)", receipt.gross.toString());
