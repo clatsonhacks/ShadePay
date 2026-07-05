@@ -63,6 +63,24 @@ interface IMpcPricedSettlementVerifier {
     ) external view returns (bool);
 }
 
+interface IStreamOpenVerifier {
+    function verifyProof(
+        uint256[2] calldata a,
+        uint256[2][2] calldata b,
+        uint256[2] calldata c,
+        uint256[13] calldata pubSignals
+    ) external view returns (bool);
+}
+
+interface IStreamSettleVerifier {
+    function verifyProof(
+        uint256[2] calldata a,
+        uint256[2][2] calldata b,
+        uint256[2] calldata c,
+        uint256[11] calldata pubSignals
+    ) external view returns (bool);
+}
+
 /// @dev A Groth16 proof, decomposed as snarkjs emits it.
 struct Groth16Proof {
     uint256[2] a;

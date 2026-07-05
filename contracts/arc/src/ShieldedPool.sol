@@ -98,6 +98,12 @@ contract ShieldedPool is AccessControl, Pausable, IncrementalMerkleTree {
     // duplicate-deposit guard (cctp nonce => used)
     mapping(bytes32 => bool) public depositUsed;
 
+    // authorized StreamEscrow contract(s) allowed to insert channel notes
+    // (change/payee/refund/reclaim) into this pool's shared tree. Value is
+    // conserved in-circuit by the stream_open/stream_settle circuits, so a
+    // stream insert carries an explicit signed supply delta the escrow computes.
+    mapping(address => bool) public authorizedStreamContract;
+
     // ---- events (mirror Soroban event topics) ----
     event Deposit(
         uint32 indexed sourceDomain,
@@ -601,6 +607,38 @@ contract ShieldedPool is AccessControl, Pausable, IncrementalMerkleTree {
 
     function unpause() external onlyRole(ADMIN_ROLE) {
         _unpause();
+    }
+
+    // ============================================================
+    // Stream escrow integration
+    // ============================================================
+    error UnauthorizedStreamContract();
+
+    event StreamContractSet(address indexed streamContract, bool allowed);
+
+    function setAuthorizedStreamContract(address streamContract, bool allowed) external onlyRole(ADMIN_ROLE) {
+        authorizedStreamContract[streamContract] = allowed;
+        emit StreamContractSet(streamContract, allowed);
+    }
+
+    /**
+     * @notice Insert a channel note into the shared tree, adjusting the asset's
+     *         note supply by `supplyDelta`. Callable only by an authorized
+     *         StreamEscrow. The stream_open/stream_settle circuits enforce value
+     *         conservation, so the escrow is trusted only to pass a supply delta
+     *         consistent with those proofs (e.g. open: -cap once the reserved
+     *         amount leaves the note set; settle/reclaim: +cap when it re-enters).
+     *         The pool still enforces its own reserve invariant on every delta.
+     * @return leafIndex the inserted leaf's index
+     */
+    function streamInsert(uint256 assetId, uint256 commitment, int256 supplyDelta)
+        external
+        whenNotPaused
+        returns (uint32 leafIndex)
+    {
+        if (!authorizedStreamContract[msg.sender]) revert UnauthorizedStreamContract();
+        if (supplyDelta != 0) _adjustNoteSupply(assetId, supplyDelta);
+        leafIndex = _insert(commitment);
     }
 
     // ============================================================
