@@ -1,4 +1,4 @@
-# Shade Streams — Private Nanopayments for Agents on Arc
+# ShadePay — Private Nanopayments for Agents on Arc
 
 > **Pay by the fraction. Settle the net. Reveal nothing.**
 >
@@ -27,7 +27,7 @@
 For as long as a payment couldn't be smaller than ~30¢ after fees, you couldn't
 sell a one-cent play or charge an agent per API call — you had to bundle a month
 and charge $10. **Nanopayments remove the floor.** But a transparent per-call
-loop leaks every payment. Shade Streams gives you both: **sub-cent, per-call
+loop leaks every payment. ShadePay gives you both: **sub-cent, per-call
 payments that are also private**, settled on Arc in USDC.
 
 Two rails, one story:
