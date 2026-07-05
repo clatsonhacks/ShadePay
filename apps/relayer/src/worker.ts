@@ -310,27 +310,94 @@ export async function processRelayerJob(queue: JobQueue, job: ServiceJob): Promi
       signatures: sigs as import("@shade/mpc-crypto").NodeSignature[]
     };
 
+    // Arc dispatch: a pre-built BN254 proof (from buildMpcSettlementProofBn254
+    // / buildMpcPricedSettlementProofBn254) means this batch settles on Arc.
+    // NOTE: the upstream MPC intent-matching pipeline (apps/mpc-committee,
+    // the private-RFQ intent routes in apps/api) still generates coins in the
+    // Stellar/BLS12-381 stellar-coinutils format — producing a BN254-shaped
+    // proof for a real matched pair requires that pipeline to emit BN254 coin
+    // data too, which is a larger, separate change (see docs/ARC_PORT_STATUS.md).
+    // This branch covers the submission side only: given a proof, submit it.
+    const isArc = !!(p.proof && p.publicSignals);
+
     // pin the committee from the on-chain registry (set via the pool's
     // admin-only set_committee), never from the signatures being checked —
     // deriving the "expected" committee from the batch's own signatures makes
     // verification tautological (any self-consistent attacker keyset passes).
-    if (!pool || !relayerSecret) throw new Error("MPC_SETTLE_SUBMIT missing SHIELDED_POOL_CONTRACT / STELLAR_RELAYER_SECRET to pin on-chain committee");
     let committee: import("@shade/mpc-crypto").CommitteeNodeInfo[];
-    try {
-      const res = sorobanInvoke({
-        contractId: pool, secret: relayerSecret, method: "get_committee",
-        rpcUrl: RPC, passphrase: PASS, readOnly: true, retries: 3
-      });
-      const onChainPubkeys = JSON.parse(res.returnValue) as string[];
-      if (onChainPubkeys.length === 0) throw new Error("on-chain committee is empty — call pool.set_committee() first");
-      committee = onChainPubkeys.map((pk, i) => ({ nodeId: `chain-${i}`, encryptionPubkey: "", signingPubkey: pk.toLowerCase() }));
-    } catch (err) {
-      throw new Error(`MPC batch ${p.batchId}: failed to pin committee from pool.get_committee(): ${(err as Error).message}`);
+    if (isArc) {
+      const { arcInvoke, arcNetwork } = await import("@shade/arc-actions");
+      const { SHIELDED_POOL_ABI } = await import("@shade/arc-actions/abi");
+      const arcPool = env.ARC_SHIELDED_POOL_CONTRACT;
+      if (!arcPool) throw new Error("MPC_SETTLE_SUBMIT (Arc) missing ARC_SHIELDED_POOL_CONTRACT to pin on-chain committee");
+      try {
+        const res = await arcInvoke({ network: arcNetwork(), contractAddress: arcPool, abi: SHIELDED_POOL_ABI, method: "getCommittee", readOnly: true });
+        const onChainPubkeys = res.returnValue as string[]; // bytes32[] — no JSON parsing needed, unlike Soroban's string-array return
+        if (onChainPubkeys.length === 0) throw new Error("on-chain committee is empty — call pool.setCommittee() first");
+        committee = onChainPubkeys.map((pk, i) => ({ nodeId: `chain-${i}`, encryptionPubkey: "", signingPubkey: pk.toLowerCase() }));
+      } catch (err) {
+        throw new Error(`MPC batch ${p.batchId}: failed to pin committee from pool.getCommittee() (Arc): ${(err as Error).message}`);
+      }
+    } else {
+      if (!pool || !relayerSecret) throw new Error("MPC_SETTLE_SUBMIT missing SHIELDED_POOL_CONTRACT / STELLAR_RELAYER_SECRET to pin on-chain committee");
+      try {
+        const res = sorobanInvoke({
+          contractId: pool, secret: relayerSecret, method: "get_committee",
+          rpcUrl: RPC, passphrase: PASS, readOnly: true, retries: 3
+        });
+        const onChainPubkeys = JSON.parse(res.returnValue) as string[];
+        if (onChainPubkeys.length === 0) throw new Error("on-chain committee is empty — call pool.set_committee() first");
+        committee = onChainPubkeys.map((pk, i) => ({ nodeId: `chain-${i}`, encryptionPubkey: "", signingPubkey: pk.toLowerCase() }));
+      } catch (err) {
+        throw new Error(`MPC batch ${p.batchId}: failed to pin committee from pool.get_committee(): ${(err as Error).message}`);
+      }
     }
 
     const valid = verifySignedBatch(batch, committee);
     if (!valid) throw new Error(`MPC batch ${p.batchId}: signature verification failed (${sigs.length} sigs, need ≥2/3)`);
     await queue.setStatus(job.job_id, "verified_signatures", `batch ${p.batchId} — ${sigs.length} committee sigs valid`);
+
+    if (isArc) {
+      // Arc's mpcSettle/mpcSettlePriced don't take nullifiers/commitments/root
+      // as explicit args the way Soroban's did — those all live inside the
+      // proof's public-signals array (pub[0..3] = nullifierA, nullifierB,
+      // outputCommitmentA, outputCommitmentB; the contract reads them from
+      // there and inserts the two output leaves itself, computing the new
+      // root on-chain). The relayer's only job here is: verify the committee
+      // threshold signature (done above, chain-agnostically) and submit.
+      const { arcInvoke, arcNetwork } = await import("@shade/arc-actions");
+      const { SHIELDED_POOL_ABI } = await import("@shade/arc-actions/abi");
+      const arcPool = env.ARC_SHIELDED_POOL_CONTRACT;
+      const arcRelayerKey = env.ARC_RELAYER_PRIVATE_KEY;
+      if (!arcPool || !arcRelayerKey) throw new Error("MPC_SETTLE_SUBMIT (Arc) missing ARC_SHIELDED_POOL_CONTRACT / ARC_RELAYER_PRIVATE_KEY");
+      const { Wallet } = await import("ethers");
+
+      const toBytes32 = (h: string) => (h.startsWith("0x") ? h : "0x" + h);
+      const signerPubkeys = sigs.map((s) => toBytes32(s.signingPubkey));
+      const signatures = sigs.map((s) => toBytes32(s.signature));
+      const publicSignals = p.publicSignals as string[];
+      // priced (20 signals) vs same-asset (12 signals) — the circuit/contract
+      // pair differ by public-signal count, not an explicit payload flag, so
+      // this stays correct even if a caller forgets to set one.
+      const method = publicSignals.length === 20 ? "mpcSettlePriced" : "mpcSettle";
+
+      await queue.setStatus(job.job_id, "submitting", `pool.${method} match[${p.matchIndex}] (Arc)`);
+      const r = await arcInvoke({
+        network: arcNetwork(),
+        contractAddress: arcPool,
+        abi: SHIELDED_POOL_ABI,
+        method,
+        args: [toBytes32(String(p.batchHash)), signerPubkeys, signatures, p.proof, publicSignals],
+        wallet: new Wallet(arcRelayerKey),
+      });
+      return {
+        settled: true, onChain: true,
+        batchId: p.batchId, matchIndex: p.matchIndex,
+        txHash: r.hash,
+        zkProof: { generated: true, verified: true },
+        note: `pool.${method} confirmed with ZK proof (Arc)`,
+      };
+    }
 
     // attempt ZK proof generation for the matched pair.
     // MpcCircuitNotBuiltError is expected until `bash circuits/mpc_settlement/build.sh`

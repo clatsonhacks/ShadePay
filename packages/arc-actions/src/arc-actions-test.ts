@@ -455,6 +455,70 @@ async function testWithdrawFullLoop(network: Network, provider: JsonRpcProvider,
 
   const burnedAmount: bigint = await (messenger as any).lastAmount();
   check("CCTP messenger received the correct burn amount", burnedAmount === 300n, `${burnedAmount}`);
+
+  // ============================================================
+  // mpcSettle: proves SHIELDED_POOL_ABI's mpcSettle argument order
+  // (bytes32, bytes32[], bytes[], tuple, uint256[12]) matches the compiled
+  // contract, mirroring the exact call apps/relayer/src/worker.ts's Arc
+  // branch makes. A committee of 3 with a mock ed25519 verifier (accepts any
+  // signature) isolates this from ed25519 specifics — the threshold/
+  // distinct/registered logic is already covered by ShieldedPool.t.sol's
+  // Foundry tests; what's new here is the ABI shape itself.
+  // ============================================================
+  await ((await (pool.connect(admin) as any).setMpcVerifier(await mockVerifier.getAddress(), { nonce: adminNonce++ })) as any).wait();
+  const committee = [solverPubkey, "0x" + "51".repeat(32), "0x" + "52".repeat(32)];
+  await ((await (pool.connect(admin) as any).setCommittee(committee, { nonce: adminNonce++ })) as any).wait();
+
+  // fourth deposit: two more input commitments for the MPC match to spend.
+  const mpcCommitmentA = 111111111111111111111111111111n;
+  const mpcCommitmentB = 222222222222222222222222222222n;
+  for (const [i, commitment] of [mpcCommitmentA, mpcCommitmentB].entries()) {
+    const nonce = "0x" + (i === 0 ? "a1" : "a2").repeat(32);
+    const dPub: string[] = new Array(14).fill("0");
+    dPub[0] = commitment.toString();
+    dPub[1] = "4";
+    dPub[2] = "3";
+    dPub[4] = hashToField(BigInt(nonce)).toString();
+    dPub[5] = "1";
+    dPub[6] = "21";
+    dPub[7] = "200";
+    dPub[8] = addressHash(usdcAddress).toString();
+    dPub[9] = addressHash(poolAddress).toString();
+    dPub[10] = hashToField(1n).toString();
+    dPub[11] = hashToField(1n).toString();
+    dPub[12] = POOL_ID.toString();
+    dPub[13] = CHAIN_ID.toString();
+    await ((await (pool.connect(admin) as any).receiveDeposit(3, nonce, usdcAddress, 200n, commitment, 1n, 1n, proof, dPub, { nonce: adminNonce++ })) as any).wait();
+  }
+
+  const batchHash = "0x" + "60".repeat(32);
+  const mpcPub: string[] = new Array(12).fill("0");
+  mpcPub[0] = "0x" + "c1".repeat(32); // nullifierHashA (fresh — 0xaa/0xbb are already spent by the withdraw/RFQ sections above)
+  mpcPub[1] = "0x" + "c2".repeat(32); // nullifierHashB
+  mpcPub[2] = "999999"; // outputCommitmentA
+  mpcPub[3] = "888888"; // outputCommitmentB
+  mpcPub[4] = (await (pool as any).getRoot()).toString(); // stateRoot (post-deposits)
+  mpcPub[5] = ASSOC_ROOT.toString();
+  mpcPub[6] = hashToField(BigInt(batchHash)).toString();
+  mpcPub[7] = POOL_ID.toString();
+  mpcPub[8] = CHAIN_ID.toString();
+  mpcPub[9] = "200"; // matchedAmount7dp
+  mpcPub[10] = deadline.toString();
+  mpcPub[11] = usdcAssetId.toString();
+
+  // threshold for n=3 is ceil(6/3)=2
+  const leavesBefore: bigint = BigInt(await (pool as any).getLeafCount());
+  const mpcResult = await arcInvoke({
+    network,
+    contractAddress: poolAddress,
+    abi: SHIELDED_POOL_ABI,
+    method: "mpcSettle",
+    args: [batchHash, [committee[0], committee[1]], ["0x00", "0x00"], proof, mpcPub],
+    wallet: new Wallet(ADMIN_KEY, provider),
+  });
+  check("real mpcSettle() settles via arcInvoke", mpcResult.status === "SUCCESS", mpcResult.hash);
+  const leavesAfter: bigint = BigInt(await (pool as any).getLeafCount());
+  check("mpcSettle inserts both output commitments", leavesAfter - leavesBefore === 2n, `${leavesAfter - leavesBefore}`);
 }
 
 function finish() {
