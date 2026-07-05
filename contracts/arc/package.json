@@ -1,0 +1,14 @@
+{
+  "name": "@shade/contracts-arc",
+  "version": "0.1.0",
+  "description": "Shade shielded pool contracts ported to Arc (EVM)",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vv",
+    "test:gas": "forge test -vv --gas-report",
+    "clean": "forge clean"
+  },
+  "devDependencies": {
+    "forge-std": "github:foundry-rs/forge-std"
+  }
+}
