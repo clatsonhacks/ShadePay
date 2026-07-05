@@ -23,6 +23,7 @@
     "circuits:test:arc": "tsx scripts/circuits-test-arc.ts",
     "arc:sync-verifiers": "tsx scripts/sync-arc-verifiers.ts",
     "proving-bn254:test": "tsx packages/proving/src/bn254/prove-bn254-test.ts",
+    "stream-proving:test": "tsx packages/proving/src/bn254/stream-test.ts",
     "arc-actions:test": "tsx packages/arc-actions/src/arc-actions-test.ts",
     "contracts:build:arc": "cd contracts/arc && forge build",
     "contracts:test:arc": "cd contracts/arc && forge test -vv",
@@ -84,6 +85,7 @@
     "mpc:priced:e2e": "tsx apps/cli/src/mpc-priced-onchain-e2e.ts",
     "mpc:integration": "tsx apps/cli/src/phase2-integration.ts",
     "sdk:test": "tsx packages/sdk/src/sdk-test.ts",
+    "streams-sdk:test": "tsx packages/sdk/src/streams-test.ts",
     "deploy:mpc:verifier": "tsx scripts/deploy-mpc-verifier.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

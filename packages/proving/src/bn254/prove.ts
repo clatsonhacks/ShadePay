@@ -34,7 +34,7 @@ export type Bn254ProofResult = {
   verified: boolean;
 };
 
-async function proveBn254Circuit(circuitName: string, input: Record<string, unknown>): Promise<Bn254ProofResult> {
+export async function proveBn254Circuit(circuitName: string, input: Record<string, unknown>): Promise<Bn254ProofResult> {
   const dir = circuitDir(circuitName);
   const wasm = resolve(dir, "build/main_js/main.wasm");
   const zkey = resolve(dir, "output/main_final.zkey");
