@@ -21,11 +21,11 @@ export function Hero() {
 
   // Once logged in, drop straight into the app.
   useEffect(() => {
-    if (ready && authenticated) router.push("/dashboard")
+    if (ready && authenticated) router.push("/demo")
   }, [ready, authenticated, router])
 
   const onConnect = () => {
-    if (authenticated) router.push("/dashboard")
+    if (authenticated) router.push("/demo")
     else login()
   }
 

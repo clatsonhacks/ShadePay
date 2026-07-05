@@ -9,11 +9,11 @@ import { useHealth } from "@/lib/hooks"
 import { GlyphMatrix } from "@/components/ui/glyph-matrix"
 
 const NAV = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/deposit", label: "Deposit" },
-  { href: "/move", label: "Move" },
-  { href: "/reports", label: "Compliance" },
-  { href: "/activity", label: "Activity" },
+  { href: "/demo",     label: "Demo" },
+  { href: "/bridge",   label: "Bridge" },
+  { href: "/stream",   label: "Stream" },
+  { href: "/service",  label: "Service" },
+  { href: "/receipts", label: "Receipts" },
 ]
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
