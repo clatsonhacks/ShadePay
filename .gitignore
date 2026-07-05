@@ -56,3 +56,6 @@ apps/web/.env.local
 infra/.env
 apps/web/tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+#
+.claude/
