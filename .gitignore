@@ -36,6 +36,12 @@ proof-artifacts/
 circuits/**/build/
 circuits/**/output/
 
+# --- Foundry (Arc/EVM contracts) ---
+contracts/arc/out/
+contracts/arc/cache/
+contracts/arc/lib/
+contracts/arc/broadcast/
+
 # --- external vendored clone (soroban-examples; see vendor-patches/) ---
 .zk-ref/
 
