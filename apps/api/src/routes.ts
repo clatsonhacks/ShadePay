@@ -453,6 +453,37 @@ export async function registerRoutes(app: FastifyInstance, store = new Store(), 
     const xdr = await buildInvokeXdr({ network: testnet(), source: b.to, contractId: process.env.SHIELDED_POOL_CONTRACT ?? "", method: "withdraw", params: withdrawParams(b.to, b.proofHex, b.publicHex) });
     return { unsigned_xdr: xdr, sign_with: "stellar_wallet", submit_to: "/v1/withdrawals/submit (signedXdr)" };
   });
+  // Arc/EVM equivalent of build-xdr: builds the UNSIGNED withdraw(to, proof, pub)
+  // transaction for the user's EVM wallet to sign client-side. proof/pub come
+  // from @shade/proving's bn254 pipeline (buildWithdrawProofBn254), which
+  // already exports the native {a,b,c} + uint256[] shapes ShieldedPool.sol
+  // expects — no byte-blob decoding needed here, unlike the Stellar path.
+  app.post("/v1/withdrawals/build-tx", async (request) => {
+    await authedUser(store, request);
+    await assertRootHealthy(store);
+    const b = (request.body ?? {}) as {
+      to?: string;
+      proof?: { a: [string, string]; b: [[string, string], [string, string]]; c: [string, string] };
+      publicSignals?: string[];
+    };
+    if (!b.to || !b.proof || !b.publicSignals) {
+      const e = new Error("to, proof, publicSignals required") as Error & { statusCode: number };
+      e.statusCode = 400;
+      throw e;
+    }
+    const { buildUnsignedTx, withdrawArgs, arcNetwork, serializeUnsignedTx } = await import("@shade/arc-actions");
+    const { SHIELDED_POOL_ABI } = await import("@shade/arc-actions/abi");
+    const contractAddress = process.env.ARC_SHIELDED_POOL_CONTRACT ?? "";
+    const unsignedTx = await buildUnsignedTx({
+      network: arcNetwork(),
+      from: b.to,
+      contractAddress,
+      abi: SHIELDED_POOL_ABI,
+      method: "withdraw",
+      params: withdrawArgs(b.to, b.proof, b.publicSignals),
+    });
+    return { unsigned_tx: serializeUnsignedTx(unsignedTx), sign_with: "evm_wallet", submit_to: "/v1/withdrawals/submit (signedRawTx)" };
+  });
   // Submit a prepared withdraw proof via the relayer (pool.withdraw on-chain).
   app.post("/v1/withdrawals/submit", async (request) => {
     await authedUser(store, request);

@@ -135,15 +135,26 @@ export async function processRelayerJob(queue: JobQueue, job: ServiceJob): Promi
   }
 
   if (job.job_type === "WITHDRAW_PUBLIC_SUBMIT" || job.job_type === "WITHDRAW_CCTP_BURN") {
-    // PHASE 7: `to` (the note owner) must authorize these. The CLIENT signs the
-    // Soroban XDR with its Stellar wallet (Freighter/Privy) and submits the signed
-    // XDR; the relayer only BROADCASTS it. No user secret touches the backend.
+    // `to` (the note owner) must authorize these. The CLIENT signs and the
+    // relayer only BROADCASTS — no user secret touches the backend, on either
+    // chain. Dispatch on which signed-payload field is present: `signedRawTx`
+    // (Arc/EVM, from /v1/withdrawals/build-tx) or `signedXdr` (legacy Stellar
+    // path, from /v1/withdrawals/build-xdr).
+    const signedRawTx = p.signedRawTx as string | undefined;
     const signedXdr = p.signedXdr as string | undefined;
-    if (!signedXdr) throw new Error(`${job.job_type} requires a client-signed XDR (signedXdr); backend never signs user Stellar actions`);
-    await queue.setStatus(job.job_id, "broadcasting", `broadcast signed ${job.job_type}`);
-    const { broadcastSignedXdr } = await import("@shade/stellar-actions");
-    const r = await broadcastSignedXdr({ rpcUrl: RPC, passphrase: PASS }, signedXdr);
-    return { txHash: r.hash, status: r.status };
+    if (signedRawTx) {
+      await queue.setStatus(job.job_id, "broadcasting", `broadcast signed ${job.job_type} (Arc)`);
+      const { broadcastSignedTx, arcNetwork } = await import("@shade/arc-actions");
+      const r = await broadcastSignedTx(arcNetwork(), signedRawTx);
+      return { txHash: r.hash, status: r.status };
+    }
+    if (signedXdr) {
+      await queue.setStatus(job.job_id, "broadcasting", `broadcast signed ${job.job_type} (Stellar)`);
+      const { broadcastSignedXdr } = await import("@shade/stellar-actions");
+      const r = await broadcastSignedXdr({ rpcUrl: RPC, passphrase: PASS }, signedXdr);
+      return { txHash: r.hash, status: r.status };
+    }
+    throw new Error(`${job.job_type} requires a client-signed payload: signedRawTx (Arc) or signedXdr (Stellar)`);
   }
 
   if (job.job_type === "RFQ_SETTLE_SUBMIT") {
